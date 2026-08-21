@@ -90,6 +90,8 @@ fn trace_session() -> VortexSession {
     vortex_alp::initialize(&session);
     vortex_datetime_parts::initialize(&session);
     vortex_decimal_byte_parts::initialize(&session);
+    #[cfg(feature = "unstable_encodings")]
+    vortex_elias_fano::initialize(&session);
     vortex_fastlanes::initialize(&session);
     vortex_runend::initialize(&session);
     vortex_sequence::initialize(&session);
@@ -361,6 +363,11 @@ fn trace_scan_like_on_compressed_comment() -> VortexResult<()> {
     insta::assert_snapshot!(optimized.trace.to_string(), @"");
     // Delta is only registered under `unstable_encodings`. Without it the offsets stay bitpacked
     // and canonicalize inside the FSST kernel, so the scan has no extra children to execute.
+    //
+    // Elias-Fano is registered alongside delta but never claims these offsets:
+    // `EliasFanoScheme` declines under an FSST ancestor, because the like kernel materialises
+    // its offsets child (`codes.offsets().execute::<PrimitiveArray>`). If that exclusion is
+    // ever dropped, the `unstable_encodings` trace below grows an Elias-Fano decode instead.
     #[cfg(not(feature = "unstable_encodings"))]
     insta::assert_snapshot!(executed.trace.to_string(), @"
     execute_until target=AnyCanonical root=vortex.like(bool, len=4096)
