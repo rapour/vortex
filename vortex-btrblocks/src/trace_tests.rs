@@ -87,6 +87,7 @@ fn trace_session() -> VortexSession {
     vortex_alp::initialize(&session);
     vortex_datetime_parts::initialize(&session);
     vortex_decimal_byte_parts::initialize(&session);
+    vortex_elias_fano::initialize(&session);
     vortex_fastlanes::initialize(&session);
     vortex_runend::initialize(&session);
     vortex_sequence::initialize(&session);
@@ -355,6 +356,10 @@ fn trace_scan_like_on_compressed_comment() -> VortexResult<()> {
     // No reduce rule rewrites a like over FSST; the FSST like kernel compiles the pattern and
     // matches in compressed space at execution time.
     insta::assert_snapshot!(optimized.trace.to_string(), @"");
+    // Elias-Fano is registered alongside delta but never claims these offsets: `EliasFanoScheme`
+    // declines under an FSST ancestor, because the like kernel materialises its offsets child
+    // (`codes.offsets().execute::<PrimitiveArray>`). If that exclusion is ever dropped, the trace
+    // below grows an Elias-Fano decode instead.
     insta::assert_snapshot!(executed.trace.to_string(), @"
     execute_until target=AnyCanonical root=vortex.like(bool, len=4096)
       iter 0 current=vortex.like(bool, len=4096) builder_active=false
