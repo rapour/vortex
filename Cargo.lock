@@ -3016,6 +3016,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ef-vs-delta-random-access"
+version = "0.1.0"
+dependencies = [
+ "codspeed-divan-compat",
+ "futures",
+ "tokio",
+ "vortex",
+ "vortex-bench",
+ "vortex-btrblocks",
+]
+
+[[package]]
 name = "either"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

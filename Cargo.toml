@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "benchmarks/ef-vs-delta-random-access",
     # Core crates in dependency order
     "vortex-array-macros",
     "vortex-error",

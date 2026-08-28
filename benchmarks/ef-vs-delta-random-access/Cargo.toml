@@ -1,0 +1,32 @@
+[package]
+name = "ef-vs-delta-random-access"
+description = "Elias-Fano vs FastLanes delta random access, following vortex-bench's random_access/take.rs"
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+divan = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+vortex = { workspace = true, features = ["files", "tokio", "unstable_encodings"] }
+vortex-bench = { workspace = true }
+vortex-btrblocks = { workspace = true, features = ["unstable_encodings"] }
+
+[[bench]]
+name = "random_access"
+harness = false
+
+[lints]
+workspace = true
