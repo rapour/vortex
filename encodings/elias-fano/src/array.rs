@@ -671,10 +671,10 @@ fn validate_parts(
             expected_samples0 + expected_samples1
         );
 
-        // A sample is fed straight to `BitBuffer::select_range` as a window start, which asserts
-        // rather than raises past the end, so check every one — there are only `n / 256 + zeros /
-        // 512`. Each is pinned above by the upper array's length and below by the rank it stands
-        // for, which gives the strict increase a sampled search relies on.
+        // A sample is fed straight to `select_range` as a window start, which asserts rather than
+        // raises past the end, so check every one — there are only `n / 256 + zeros / 512`. Each is
+        // pinned above by the upper array's length and below by the rank it stands for, which gives
+        // the strict increase a sampled search relies on.
         let (samples0, samples1) = data.sample_bytes()?;
         for (table, name, log_sampling, floor) in [
             (samples0, "zero", LOG_SAMPLING0, 0),

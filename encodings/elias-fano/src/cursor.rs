@@ -40,6 +40,8 @@ use crate::params::LINEAR_SCAN_THRESHOLD;
 use crate::params::LOG_SAMPLING0;
 use crate::params::LOG_SAMPLING1;
 use crate::params::lower_mask;
+use crate::select::select_range;
+use crate::select::select_zero_range;
 
 /// A whole FastLanes block is bulk-unpacked once *more* than this many reads have landed inside it.
 ///
@@ -65,8 +67,7 @@ pub(crate) fn position_of_rank(
         usize::try_from(read_sample(samples1, sample - 1))?
     };
     let nth = usize::try_from(rank - ((sample as u64) << LOG_SAMPLING1))?;
-    upper
-        .select_range(start, upper_len, nth)
+    select_range(upper, start, upper_len, nth)
         .map(|offset| start + offset)
         .ok_or_else(|| vortex_err!("Elias-Fano upper array holds no element of rank {rank}"))
 }
@@ -504,9 +505,7 @@ impl<'a> EliasFanoCursor<'a> {
             usize::try_from(read_sample(self.samples0, sample - 1))?
         };
         let nth = usize::try_from(high - ((sample as u64) << LOG_SAMPLING0))?;
-        let position = self
-            .upper
-            .select_zero_range(start, self.upper_len, nth)
+        let position = select_zero_range(&self.upper, start, self.upper_len, nth)
             .map(|offset| (start + offset) as u64)
             .ok_or_else(|| {
                 vortex_err!("Elias-Fano upper array holds no bucket boundary for high part {high}")
@@ -529,9 +528,7 @@ impl<'a> EliasFanoCursor<'a> {
     fn advance(&mut self) -> VortexResult<()> {
         let seat = self.seated();
         let (from, rank) = (seat.position + 1, seat.rank + 1);
-        let offset = self
-            .upper
-            .select_range(from, self.upper_len, 0)
+        let offset = select_range(&self.upper, from, self.upper_len, 0)
             .ok_or_else(|| vortex_err!("Elias-Fano upper array holds no element of rank {rank}"))?;
         self.reseat(from + offset, rank)
     }

@@ -1454,9 +1454,9 @@ fn test_list_offsets() -> VortexResult<()> {
 
 // ── Corrupt arrays must raise, never panic ─────────────────────────────
 
-/// A sample table is fed straight to `BitBuffer::select_range` as a window start, and that asserts
-/// on a start past the end. So a file with the right sample *count* and garbage sample *values* has
-/// to be rejected at construction, not left to panic on the first query.
+/// A sample table is fed straight to `select_range` as a window start, and that asserts on a start
+/// past the end. So a file with the right sample *count* and garbage sample *values* has to be
+/// rejected at construction, not left to panic on the first query.
 #[rstest]
 #[case::past_the_end(u64::MAX)]
 #[case::just_past_the_end(u64::MAX - 1)]

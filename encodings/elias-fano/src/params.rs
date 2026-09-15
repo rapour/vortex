@@ -16,9 +16,9 @@ use vortex_error::vortex_ensure;
 
 /// One zero-sample is stored per `1 << LOG_SAMPLING0` unset bits of the upper array.
 ///
-/// The upper array is roughly 50% dense, so 512 zeros span about 512 bits — one or two 64-byte
-/// chunks, the window [`BitBuffer::select_zero_range`](vortex_buffer::BitBuffer::select_zero_range)
-/// is fastest over. [`LOG_SAMPLING1`] is sized the same way.
+/// The upper array is roughly 50% dense, so 512 zeros span about 512 bits — eight words, a window
+/// short enough for [`select_zero_range`](crate::select_zero_range) to walk without vectorising.
+/// [`LOG_SAMPLING1`] is sized the same way.
 pub(crate) const LOG_SAMPLING0: usize = 9;
 
 /// One one-sample is stored per `1 << LOG_SAMPLING1` set bits of the upper array.

@@ -29,6 +29,7 @@ mod cursor;
 mod kernel;
 pub(crate) mod params;
 mod rules;
+mod select;
 
 pub use array::EliasFano;
 pub use array::EliasFanoArray;
@@ -39,6 +40,8 @@ pub use array::EliasFanoSlots;
 pub use compress::elias_fano_encode;
 pub use cursor::EliasFanoCursor;
 pub use params::encoded_bit_size;
+pub use select::select_range;
+pub use select::select_zero_range;
 use vortex_array::ArrayVTable;
 use vortex_array::aggregate_fn::AggregateFnVTable;
 use vortex_array::aggregate_fn::fns::is_sorted::IsSorted;
