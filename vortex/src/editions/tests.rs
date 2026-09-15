@@ -137,15 +137,10 @@ fn core_2026_08_3_is_frozen_and_adds_variants() {
 }
 
 #[test]
-fn preview_holds_only_elias_fano() {
+fn preview_starts_empty() {
     let session = session().unwrap_or_else(|e| panic!("registering editions: {e}"));
-    assert!(
-        session
-            .components_in(&PREVIEW_2026_08_0, ComponentKind::Array)
-            .iter()
-            .any(|inclusion| inclusion.component_id.as_str() == "vortex.elias_fano")
-    );
     for kind in [
+        ComponentKind::Array,
         ComponentKind::Layout,
         ComponentKind::DType,
         ComponentKind::Aggregate,
