@@ -119,8 +119,8 @@ fn scalar_at(bencher: Bencher, case: (Shape, usize)) {
         });
 }
 
-/// Whole-array decode, which walks the upper array once and reads the low bits a FastLanes block at
-/// a time rather than one element at a time.
+/// Whole-array decode, which walks the upper array once and reads the low bits in pieces rather
+/// than one element at a time.
 #[divan::bench(args = CASES)]
 fn decode_bulk(bencher: Bencher, case: (Shape, usize)) {
     let (shape, n) = case;
