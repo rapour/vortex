@@ -11853,7 +11853,6 @@ name = "vortex-elias-fano"
 version = "0.1.0"
 dependencies = [
  "codspeed-divan-compat",
- "lending-iterator",
  "num-traits",
  "prost 0.14.4",
  "rstest",

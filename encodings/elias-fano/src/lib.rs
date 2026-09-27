@@ -25,7 +25,6 @@ mod array;
 mod compress;
 mod compute;
 pub mod ef;
-mod lower;
 mod rules;
 
 pub use array::EliasFano;

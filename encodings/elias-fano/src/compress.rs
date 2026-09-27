@@ -5,9 +5,6 @@
 //!
 //! See [`crate::ef`] for the layout both directions read and write.
 
-use std::mem::MaybeUninit;
-
-use lending_iterator::prelude::LendingIterator;
 use num_traits::AsPrimitive;
 use vortex_array::ArrayRef;
 use vortex_array::ArrayView;
@@ -28,8 +25,6 @@ use vortex_buffer::ByteBuffer;
 use vortex_error::VortexResult;
 use vortex_error::vortex_bail;
 use vortex_error::vortex_ensure;
-use vortex_fastlanes::BitPackedArrayExt;
-use vortex_fastlanes::FL_CHUNK_SIZE;
 use vortex_fastlanes::bitpack_compress::bitpack_encode_unchecked;
 
 use crate::EliasFano;
@@ -38,8 +33,6 @@ use crate::EliasFanoData;
 use crate::array::EliasFanoArraySlotsExt;
 use crate::array::scalar_from_bits;
 use crate::ef;
-use crate::lower::materialise;
-use crate::lower::readable_in_place;
 use crate::malformed;
 
 /// Encode a sorted, non-nullable integer array with Elias-Fano.
@@ -154,11 +147,12 @@ pub(crate) fn elias_fano_decompress(
     }))
 }
 
+/// Low bits materialised per step of the bulk decode: small enough to stay in cache, large enough to
+/// amortise each `execute`.
+const LOWER_PIECE: usize = 16 * 1024;
+
 /// Decode `len` elements into the column's own width, feeding [`ef::Decoder`] the low bits one
-/// FastLanes block at a time.
-///
-/// Decides only the shape of the low-bits child: whether its packed bytes can be unpacked a block
-/// at a time, or have to be materialised first.
+/// [`LOWER_PIECE`] at a time.
 fn decode<P: NativePType>(
     array: &EliasFanoArray,
     words: &[u64],
@@ -183,34 +177,23 @@ where
         segment(&mut decoder, &mut values, reference_bits, None);
     } else {
         let first = usize::try_from(first_rank)?;
-        let window_lower = array.lower().slice(first..first + len)?;
-
-        if let Some(packed) = readable_in_place(&window_lower) {
-            let mut scratch = [const { MaybeUninit::<u64>::uninit() }; FL_CHUNK_SIZE];
-            let mut chunks = packed.unpacked_chunks::<u64>(&mut scratch)?;
-            if let Some(initial) = chunks.initial() {
-                segment(&mut decoder, &mut values, reference_bits, Some(initial));
-            }
-            if decoder.remaining() > 0 {
-                let mut full = chunks.full_chunks();
-                while let Some(chunk) = full.next() {
-                    segment(&mut decoder, &mut values, reference_bits, Some(chunk));
-                }
-            }
-            if decoder.remaining() > 0
-                && let Some(trailer) = chunks.trailer()
-            {
-                segment(&mut decoder, &mut values, reference_bits, Some(trailer));
-            }
-        } else {
-            // The slot is patched, device-resident, or some other encoding after a rewrite.
-            let dense = materialise(window_lower, ctx)?;
+        let end = first + len;
+        let mut piece_start = first;
+        while piece_start < end {
+            // Ending pieces on multiples of the piece size keeps them on FastLanes block boundaries.
+            let piece_end = ((piece_start / LOWER_PIECE + 1) * LOWER_PIECE).min(end);
+            let lows = array
+                .lower()
+                .slice(piece_start..piece_end)?
+                .execute::<PrimitiveArray>(ctx)?
+                .into_buffer::<u64>();
             segment(
                 &mut decoder,
                 &mut values,
                 reference_bits,
-                Some(dense.as_slice()),
+                Some(lows.as_slice()),
             );
+            piece_start = piece_end;
         }
     }
 
