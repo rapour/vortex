@@ -3,6 +3,7 @@
 
 use std::hash::DefaultHasher;
 use std::hash::Hasher;
+use std::iter;
 use std::slice;
 use std::sync::LazyLock;
 
@@ -71,6 +72,14 @@ fn encode_as(ptype: PType, values: &[u64]) -> VortexResult<Option<UnaryArray>> {
 fn encode(values: &[u64]) -> VortexResult<UnaryArray> {
     encode_as(PType::U64, values)?
         .ok_or_else(|| vortex_err!("{} values did not encode", values.len()))
+}
+
+/// `values` encoded, with their bits starting `offset` bits into the buffer, as a slice's would.
+fn encode_at(values: &[u64], offset: usize) -> VortexResult<UnaryArray> {
+    let shifted: BitBuffer = iter::repeat_n(false, offset)
+        .chain(encode(values)?.bits().iter())
+        .collect();
+    Unary::try_new(shifted.slice(offset..), PType::U64, values.len())
 }
 
 /// `len` values drawn from `0..=max`, in no particular order.
@@ -189,10 +198,6 @@ fn test_try_new_rejects() -> VortexResult<()> {
     let rejected = [
         ("signed", Unary::try_new(bits(&[false]), PType::I64, 1)),
         (
-            "nonzero offset",
-            Unary::try_new(bits(&[true, true, true, false]).slice(3..), PType::U64, 1),
-        ),
-        (
             "fewer bits than values",
             Unary::try_new(bits(&[false, false]), PType::U64, 3),
         ),
@@ -243,7 +248,13 @@ fn test_try_new_rejects() -> VortexResult<()> {
 #[test]
 fn test_deserialize_rejects() {
     let dtype = DType::Primitive(PType::U64, NonNullable);
-    let metadata = |num_ones: u64| UnaryMetadata { num_ones }.encode_to_vec();
+    let metadata = |num_ones: u64| {
+        UnaryMetadata {
+            num_ones,
+            offset: 0,
+        }
+        .encode_to_vec()
+    };
     // `[1, 0]` takes the bits `10 0`.
     let bits = BufferHandle::new_host(BitBuffer::from(vec![true, false, false]).inner().clone());
     let no_children: [ArrayRef; 0] = [];
@@ -271,15 +282,29 @@ fn test_deserialize_rejects() {
     assert!(deserialize(&metadata(100), one, &no_children).is_err());
     // 2 + `u64::MAX` bits overflow the count.
     assert!(deserialize(&metadata(u64::MAX), one, &no_children).is_err());
+    // An offset of 8 or more would be a whole byte the buffer need not hold.
+    let offset_8 = UnaryMetadata {
+        num_ones: 1,
+        offset: 8,
+    };
+    assert!(deserialize(&offset_8.encode_to_vec(), one, &no_children).is_err());
+    // From bit 6, the byte holds only 2 of the 3 bits.
+    let offset_6 = UnaryMetadata {
+        num_ones: 1,
+        offset: 6,
+    };
+    assert!(deserialize(&offset_6.encode_to_vec(), one, &no_children).is_err());
     // `11 0` keeps the last bit unset, but holds two set bits where the metadata says one.
     let extra = BufferHandle::new_host(BitBuffer::from(vec![true, true, false]).inner().clone());
     assert!(deserialize(&metadata(1), slice::from_ref(&extra), &no_children).is_err());
 }
 
-#[test]
-fn test_serde_roundtrip() -> VortexResult<()> {
+#[rstest]
+#[case(0)]
+#[case(3)]
+fn test_serde_roundtrip(#[case] offset: usize) -> VortexResult<()> {
     let values = small(1000, 7, 6);
-    let decoded = serde_roundtrip(&encode(&values)?.into_array())?;
+    let decoded = serde_roundtrip(&encode_at(&values, offset)?.into_array())?;
     assert!(decoded.is::<Unary>());
     assert_arrays_eq!(
         decoded,
@@ -289,9 +314,11 @@ fn test_serde_roundtrip() -> VortexResult<()> {
     Ok(())
 }
 
-#[test]
-fn test_with_buffers_roundtrip() -> VortexResult<()> {
-    let array = encode(&small(1000, 7, 7))?.into_array();
+#[rstest]
+#[case(0)]
+#[case(3)]
+fn test_with_buffers_roundtrip(#[case] offset: usize) -> VortexResult<()> {
+    let array = encode_at(&small(1000, 7, 7), offset)?.into_array();
     let buffers = array.buffer_handles();
     // SAFETY: the replacement buffers are the array's own, so they hold the same values.
     let rebuilt = unsafe { array.clone().with_buffers(buffers) }?;
@@ -339,7 +366,11 @@ fn test_nbytes() -> VortexResult<()> {
 fn test_unary_metadata() {
     check_metadata(
         "unary.metadata",
-        &UnaryMetadata { num_ones: u64::MAX }.encode_to_vec(),
+        &UnaryMetadata {
+            num_ones: u64::MAX,
+            offset: u32::MAX,
+        }
+        .encode_to_vec(),
     );
 }
 

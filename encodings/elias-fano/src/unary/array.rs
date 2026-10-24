@@ -54,6 +54,9 @@ pub(super) struct UnaryMetadata {
     /// gives the exact bit length, which the buffer's bytes alone do not.
     #[prost(uint64, tag = "1")]
     pub(super) num_ones: u64,
+    /// Where the bits start in the buffer's first byte, so below 8.
+    #[prost(uint32, tag = "2")]
+    pub(super) offset: u32,
 }
 
 /// The parts of a [`Unary`] array: its bits.
@@ -94,22 +97,35 @@ fn num_ones_of(array: ArrayView<'_, Unary>) -> VortexResult<u64> {
 }
 
 impl UnaryData {
-    /// Rebuild the parts from a stored buffer. Only the buffer's size is checked here, because
-    /// [`BitBuffer::new`] panics on one too short for its bits. [`Array::try_from_parts`] validates
-    /// the rest.
-    fn from_buffer(buffer: ByteBuffer, num_ones: u64, len: usize) -> VortexResult<Self> {
+    /// Rebuild the parts from a stored buffer whose bits start `offset` bits in. Only the offset
+    /// and the buffer's size are checked here, because [`BitBuffer::new_with_offset`] panics on a
+    /// buffer too short for its bits. [`Array::try_from_parts`] validates the rest.
+    fn from_buffer(
+        buffer: ByteBuffer,
+        num_ones: u64,
+        offset: usize,
+        len: usize,
+    ) -> VortexResult<Self> {
+        vortex_ensure!(
+            offset < 8,
+            "UnaryArray bit offset must be below 8, got {offset}"
+        );
         let bits = bit_len(len, num_ones).ok_or_else(|| {
             vortex_err!(
                 "UnaryArray of {len} values with {num_ones} set bits overflows a usize bit count"
             )
         })?;
         vortex_ensure!(
-            buffer.len().checked_mul(8).is_some_and(|held| held >= bits),
-            "UnaryArray needs {bits} bits, but its buffer holds {} bytes",
+            buffer
+                .len()
+                .checked_mul(8)
+                .and_then(|held| held.checked_sub(offset))
+                .is_some_and(|room| room >= bits),
+            "UnaryArray needs {bits} bits from bit {offset}, but its buffer holds {} bytes",
             buffer.len()
         );
         Ok(Self {
-            bits: BitBuffer::new(buffer, bits),
+            bits: BitBuffer::new_with_offset(buffer, bits, offset),
         })
     }
 
@@ -127,7 +143,6 @@ impl UnaryData {
             ptype.is_unsigned_int(),
             "UnaryArray requires a non-nullable unsigned integer dtype, got {dtype}"
         );
-        vortex_ensure_eq!(self.bits.offset(), 0);
         let num_ones = self.bits.len().checked_sub(len).ok_or_else(|| {
             vortex_err!(
                 "UnaryArray of {len} values has only {} bits",
@@ -234,6 +249,7 @@ impl VTable for Unary {
         let data = UnaryData::from_buffer(
             buffers[0].try_to_host_sync()?,
             num_ones_of(array)?,
+            array.bits().offset(),
             array.len(),
         )?;
         Ok(ArrayParts::new(
@@ -252,6 +268,7 @@ impl VTable for Unary {
         Ok(Some(
             UnaryMetadata {
                 num_ones: num_ones_of(array)?,
+                offset: u32::try_from(array.bits().offset())?,
             }
             .encode_to_vec(),
         ))
@@ -269,7 +286,12 @@ impl VTable for Unary {
         vortex_ensure_eq!(buffers.len(), 1);
         vortex_ensure_eq!(children.len(), 0);
         let metadata = UnaryMetadata::decode(metadata)?;
-        let data = UnaryData::from_buffer(buffers[0].try_to_host_sync()?, metadata.num_ones, len)?;
+        let data = UnaryData::from_buffer(
+            buffers[0].try_to_host_sync()?,
+            metadata.num_ones,
+            usize::try_from(metadata.offset)?,
+            len,
+        )?;
         Ok(ArrayParts::new(
             self.clone(),
             dtype.clone(),
@@ -331,8 +353,8 @@ impl Unary {
     /// Prefer [`unary_encode`](crate::unary_encode) unless you already hold the bits.
     pub fn try_new(bits: BitBuffer, ptype: PType, len: usize) -> VortexResult<UnaryArray> {
         let dtype = DType::Primitive(ptype, NonNullable);
-        // `shrink_offset` also trims the bytes past the last bit, which `buffer` would otherwise
-        // export with the array.
+        // `shrink_offset` drops the whole bytes before and after the bits, so `buffer` exports only
+        // the bytes they use and the offset stays below 8, as `from_buffer` requires.
         let data = UnaryData {
             bits: bits.shrink_offset(),
         };
