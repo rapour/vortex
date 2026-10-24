@@ -11,8 +11,8 @@
 //! * `Spread`: values drawn from `[0, 2 * LEN)`, about half a value per bucket, the sparsest an
 //!   Elias-Fano high part gets.
 //! * `Runs`: `LEN / 32` values, 32 rows each, so every count is 32 and set bits come in long runs.
-//! * `Gap`: dense halves either side of one jump of `GAP` values, a long run of empty buckets that
-//!   every scan crossing it has to walk.
+//! * `Gap`: dense halves, the second starting `GAP` values after the first, so `GAP - LEN / 2`
+//!   empty buckets lie between them, a long run that every scan crossing it has to walk.
 
 #![expect(clippy::unwrap_used)]
 
@@ -55,7 +55,7 @@ const SHAPES: &[Shape] = &[Shape::Dense, Shape::Spread, Shape::Runs, Shape::Gap]
 /// 1 ms per-iteration budget.
 const LEN: usize = 1 << 14;
 
-/// The jump in `Gap`, in values.
+/// Where the second half of `Gap` starts, in values.
 const GAP: usize = LEN;
 
 /// Rows per value in `Runs`. At 64, each count would take 65 bits, past the size rule.
@@ -140,16 +140,17 @@ fn scalar_at_random(bencher: Bencher, shape: Shape) {
         });
 }
 
-/// Consecutive point reads from the middle, which a cursor could answer from the last position.
+/// Consecutive point reads from the middle through one repeated probe, so a cursor kept in its
+/// state could answer each from the last position.
 #[divan::bench(args = SHAPES)]
 fn scalar_at_sequential(bencher: Bencher, shape: Shape) {
     let array = encoded(shape);
     let start = array.len() / 2;
     bencher
-        .with_inputs(|| SESSION.create_execution_ctx())
-        .bench_local_values(|mut ctx| {
+        .with_inputs(|| (SESSION.create_execution_ctx(), array.repeated_probe()))
+        .bench_local_refs(|(ctx, probe)| {
             for index in start..start + PROBES {
-                divan::black_box(array.execute_scalar(index, &mut ctx).unwrap());
+                divan::black_box(probe.execute_scalar(index, ctx).unwrap());
             }
         });
 }
