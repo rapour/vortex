@@ -50,9 +50,10 @@ enum Shape {
 
 const SHAPES: &[Shape] = &[Shape::Dense, Shape::Spread, Shape::Runs, Shape::Gap];
 
-/// Sorted values behind each shape, few enough that a whole decode stays inside the 1 ms
-/// per-iteration budget.
-const LEN: usize = 1 << 16;
+/// Sorted values behind each shape. Encoding and decoding cost about one step per bucket, and
+/// `Spread`, the largest shape, has `2 * LEN` buckets, so this keeps every iteration inside the
+/// 1 ms per-iteration budget.
+const LEN: usize = 1 << 14;
 
 /// The jump in `Gap`, in values.
 const GAP: usize = LEN;
@@ -60,8 +61,8 @@ const GAP: usize = LEN;
 /// Rows per value in `Runs`. At 64, each count would take 65 bits, past the size rule.
 const ROWS_PER_VALUE: usize = 32;
 
-/// Probes per iteration. Each is a linear scan from the first bit, so 256 keep an iteration near
-/// the budget, as in `vortex-array`'s probe benchmark.
+/// Probes per iteration, as in `vortex-array`'s probe benchmark. Each is a linear scan from the
+/// first bit, so 256 keep an iteration inside the budget.
 const PROBES: usize = 256;
 
 /// How many of `values` fall in each of `buckets` buckets, one value wide.
