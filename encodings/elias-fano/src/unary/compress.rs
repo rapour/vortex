@@ -22,6 +22,7 @@ use super::array::bit_len;
 /// Returns `None` when the values cannot, or should not, be stored this way:
 /// - the dtype is not a non-nullable unsigned integer;
 /// - the values sum past `u64::MAX`;
+/// - the bits, `len` plus that sum, would not fit a `usize`;
 /// - the encoding would take more bits than the plain array's `len × bit width`, which happens
 ///   once the values average more than `bit width - 1`. This keeps large values from growing past
 ///   their input, and bounds what the encoder allocates.
@@ -45,9 +46,10 @@ pub fn unary_encode(array: ArrayView<'_, Primitive>) -> VortexResult<Option<Unar
         let Some(bits) = bit_len(len, num_ones) else {
             return Ok(None);
         };
+        // A plain size past `usize::MAX` is larger than `bits`, which fits one.
         if len
             .checked_mul(ptype.bit_width())
-            .is_none_or(|plain| bits > plain)
+            .is_some_and(|plain| bits > plain)
         {
             return Ok(None);
         }

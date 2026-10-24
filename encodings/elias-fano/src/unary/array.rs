@@ -99,7 +99,9 @@ fn num_ones_of(array: ArrayView<'_, Unary>) -> VortexResult<u64> {
 impl UnaryData {
     /// Rebuild the parts from a stored buffer whose bits start `offset` bits in. Only the offset
     /// and the buffer's size are checked here, because [`BitBuffer::new_with_offset`] panics on a
-    /// buffer too short for its bits. [`Array::try_from_parts`] validates the rest.
+    /// buffer too short for its bits. Its own check saturates, so on 32-bit it can pass a buffer a
+    /// few bits short, and this one has to stay exact. [`Array::try_from_parts`] validates the
+    /// rest.
     fn from_buffer(
         buffer: ByteBuffer,
         num_ones: u64,
@@ -115,11 +117,12 @@ impl UnaryData {
                 "UnaryArray of {len} values with {num_ones} set bits overflows a usize bit count"
             )
         })?;
+        // Saturating can only undercount what the buffer holds, so it never passes one too short.
         vortex_ensure!(
             buffer
                 .len()
-                .checked_mul(8)
-                .and_then(|held| held.checked_sub(offset))
+                .saturating_mul(8)
+                .checked_sub(offset)
                 .is_some_and(|room| room >= bits),
             "UnaryArray needs {bits} bits from bit {offset}, but its buffer holds {} bytes",
             buffer.len()
