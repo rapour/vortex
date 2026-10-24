@@ -16,9 +16,11 @@ use rand::seq::SliceRandom;
 use rstest::rstest;
 use vortex_array::Array;
 use vortex_array::ArrayContext;
+use vortex_array::ArrayDeserialization;
 use vortex_array::ArrayEq;
 use vortex_array::ArrayHash;
 use vortex_array::ArrayParts;
+use vortex_array::ArrayPlugin;
 use vortex_array::ArrayRef;
 use vortex_array::EqMode;
 use vortex_array::IntoArray;
@@ -38,6 +40,7 @@ use vortex_array::test_harness::check_metadata;
 use vortex_array::validity::Validity;
 use vortex_array::vtable::VTable;
 use vortex_buffer::BitBuffer;
+use vortex_buffer::ByteBuffer;
 use vortex_buffer::ByteBufferMut;
 use vortex_buffer::buffer;
 use vortex_error::VortexResult;
@@ -142,7 +145,8 @@ fn test_layout_example() -> VortexResult<()> {
 #[case::decreasing(PType::U64, (0..60).rev().collect())]
 #[case::runs(PType::U64, (0..500).map(|i| i / 64 * 3).collect())]
 #[case::u8(PType::U8, small(300, 7, 2))]
-#[case::u8_max(PType::U8, (0..41).map(|i| if i == 20 { 255 } else { 0 }).collect())]
+// The 1 takes the sum past 255, so `validate` checks each value, and 255 is the largest that fits.
+#[case::u8_max(PType::U8, (0..41).map(|i| match i { 20 => 255, 21 => 1, _ => 0 }).collect())]
 #[case::u16(PType::U16, small(500, 20, 3))]
 #[case::u32(PType::U32, small(500, 40, 4))]
 // A value of 1,000 that starts 4 bits into a byte, so reading it scans whole 512-bit chunks from an
@@ -245,8 +249,10 @@ fn test_try_new_rejects() -> VortexResult<()> {
     Ok(())
 }
 
-#[test]
-fn test_deserialize_rejects() {
+#[rstest]
+#[case::vtable(false)]
+#[case::plugin(true)]
+fn test_deserialize_rejects(#[case] plugin: bool) {
     let dtype = DType::Primitive(PType::U64, NonNullable);
     let metadata = |num_ones: u64| {
         UnaryMetadata {
@@ -258,11 +264,26 @@ fn test_deserialize_rejects() {
     // `[1, 0]` takes the bits `10 0`.
     let bits = BufferHandle::new_host(BitBuffer::from(vec![true, false, false]).inner().clone());
     let no_children: [ArrayRef; 0] = [];
-    // `try_from_parts` validates the parts, as the array plugin does after `deserialize`.
+    // Through the vtable alone, and through the array plugin, the path readers run.
     let deserialize = |metadata: &[u8], buffers: &[BufferHandle], children: &[ArrayRef]| {
-        Unary
-            .deserialize(&dtype, 2, metadata, buffers, &children, &SESSION)
-            .and_then(Array::try_from_parts)
+        if plugin {
+            ArrayPlugin::deserialize(
+                &Unary,
+                ArrayDeserialization::new(
+                    VTable::id(&Unary),
+                    &dtype,
+                    2,
+                    metadata,
+                    buffers,
+                    &children,
+                ),
+                &SESSION,
+            )
+        } else {
+            VTable::deserialize(&Unary, &dtype, 2, metadata, buffers, &children, &SESSION)
+                .and_then(Array::try_from_parts)
+                .map(IntoArray::into_array)
+        }
     };
 
     let one = slice::from_ref(&bits);
@@ -319,10 +340,17 @@ fn test_serde_roundtrip(#[case] offset: usize) -> VortexResult<()> {
 #[case(3)]
 fn test_with_buffers_roundtrip(#[case] offset: usize) -> VortexResult<()> {
     let array = encode_at(&small(1000, 7, 7), offset)?.into_array();
-    let buffers = array.buffer_handles();
-    // SAFETY: the replacement buffers are the array's own, so they hold the same values.
-    let rebuilt = unsafe { array.clone().with_buffers(buffers) }?;
+    // A copy of the bits, so the rebuilt array shows whether it took the replacement.
+    let replacement =
+        BufferHandle::new_host(ByteBuffer::copy_from(array.buffer_handles()[0].as_host()));
+    let replacement_ptr = replacement.as_host().as_ptr();
+    // SAFETY: the replacement is a copy of the array's own buffer, so it holds the same values.
+    let rebuilt = unsafe { array.clone().with_buffers([replacement]) }?;
     assert!(rebuilt.is::<Unary>());
+    assert_eq!(
+        rebuilt.buffer_handles()[0].as_host().as_ptr(),
+        replacement_ptr
+    );
     assert!(rebuilt.array_eq(&array, EqMode::Value));
     Ok(())
 }
