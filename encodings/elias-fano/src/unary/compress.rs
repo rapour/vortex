@@ -20,7 +20,7 @@ use super::vtable::UnaryArray;
 /// Encode `array` as a [`Unary`] array.
 ///
 /// Returns `None` when the values cannot, or should not, be stored this way:
-/// - the dtype is not a non-nullable unsigned integer;
+/// - the dtype is not a non-nullable unsigned integer, as [`Unary`] has no validity yet;
 /// - the values sum past `u64::MAX`;
 /// - the bits, `len` plus that sum, would not fit a `usize`;
 /// - the encoding would take more bits than the plain array's `len × bit width`, which happens

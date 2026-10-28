@@ -175,6 +175,7 @@ impl VTable for Unary {
     }
 
     fn slot_name(_array: ArrayView<'_, Self>, idx: usize) -> String {
+        // Validity, once added, can take an optional slot 0, as in Bool. See `Unary`.
         vortex_panic!("UnaryArray has no slots, got index {idx}")
     }
 
