@@ -1,18 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright the Vortex contributors
 
-//! Baselines for the naive `Unary` encoding, so each later optimisation can be measured
-//! against them. Keep the names and inputs stable: CodSpeed compares benchmarks by name.
+//! Baselines for the naive `Unary` encoding.
 //!
-//! Each shape is what an Elias-Fano high part will hold for `LEN` sorted values: one count per
-//! bucket of how many values fall in it. All four are small enough for the encoder's size rule:
+//! Later work on `Unary`, such as an index, a slice kernel, or a cursor, will be measured against
+//! these numbers. CodSpeed matches results by name, so keep the names, shapes, and sizes stable.
 //!
-//! * `Dense`: values drawn from `[0, LEN)`, so about one value per bucket.
-//! * `Spread`: values drawn from `[0, 2 * LEN)`, about half a value per bucket, the sparsest an
-//!   Elias-Fano high part gets.
-//! * `Runs`: `LEN / 32` values, 32 rows each, so every count is 32 and set bits come in long runs.
-//! * `Gap`: dense halves, the second starting `GAP` values after the first, so `GAP - LEN / 2`
-//!   empty buckets lie between them, a long run that every scan crossing it has to walk.
+//! Each input is the array that an Elias-Fano upper child holds for `LEN` sorted values.
+//! Elias-Fano puts each value in a _bucket_ by its high bits, and the upper child stores one count
+//! per bucket. The array under test therefore has one element per bucket, and its elements sum to
+//! `LEN`. The fixtures use buckets that are one value wide:
+//!
+//! - `Dense`: values in `0..LEN`, so `LEN` buckets with about one value each.
+//! - `Spread`: values in `0..2 * LEN`, so `2 * LEN` buckets with about half a value each.
+//! - `Runs`: every count is 32, which is the duplicate-heavy case with fewer buckets than values.
+//! - `Gap`: two dense halves with `LEN / 2` empty buckets between them.
+//!
+//! Elias-Fano chooses its low bits so that there are between `LEN` and `2 * LEN` buckets, and
+//! `Dense` and `Spread` are the two ends of that range. Encoding and decoding cost about one step
+//! per bucket, so `Spread` decides how large `LEN` can be within the 1 ms per-iteration budget.
 
 #![expect(clippy::unwrap_used)]
 
@@ -35,7 +41,7 @@ use vortex_session::VortexSession;
 static GLOBAL: MiMalloc = MiMalloc;
 
 static SESSION: LazyLock<VortexSession> = LazyLock::new(|| {
-    let session = vortex_array::array_session();
+    let session = VortexSession::empty();
     vortex_elias_fano::initialize(&session);
     session
 });

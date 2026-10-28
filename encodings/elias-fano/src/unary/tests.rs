@@ -51,11 +51,10 @@ use vortex_session::registry::ReadContext;
 use super::Unary;
 use super::UnaryArray;
 use super::array::UnaryMetadata;
-use super::bits::for_each_unset_index;
 use super::unary_encode;
 
 static SESSION: LazyLock<VortexSession> = LazyLock::new(|| {
-    let session = vortex_array::array_session();
+    let session = VortexSession::empty();
     crate::initialize(&session);
     session
 });
@@ -80,7 +79,7 @@ fn encode(values: &[u64]) -> VortexResult<UnaryArray> {
 /// `values` encoded, with their bits starting `offset` bits into the buffer, as a slice's would.
 fn encode_at(values: &[u64], offset: usize) -> VortexResult<UnaryArray> {
     let shifted: BitBuffer = iter::repeat_n(false, offset)
-        .chain(encode(values)?.bits().iter())
+        .chain(encode(values)?.to_bit_buffer().iter())
         .collect();
     Unary::try_new(shifted.slice(offset..), PType::U64, values.len())
 }
@@ -130,8 +129,8 @@ fn hash_of(array: &ArrayRef) -> u64 {
 fn test_layout_example() -> VortexResult<()> {
     let array = encode(&[2, 0, 3])?;
     assert_eq!(
-        array.bits(),
-        &BitBuffer::from(vec![true, true, false, false, true, true, true, false])
+        array.to_bit_buffer(),
+        BitBuffer::from(vec![true, true, false, false, true, true, true, false])
     );
     Ok(())
 }
@@ -425,35 +424,4 @@ fn test_lazy_slice() -> VortexResult<()> {
     let expected = primitive(PType::U64, &values[100..900]);
     assert_arrays_eq!(sliced, expected, &mut SESSION.create_execution_ctx());
     check_access(&sliced, &expected, 0x51CE)
-}
-
-#[rstest]
-#[case(0)]
-#[case(1)]
-#[case(63)]
-#[case(64)]
-#[case(65)]
-#[case(128)]
-#[case(200)]
-fn test_for_each_unset_index_agrees_with_naive(#[case] len: usize) -> VortexResult<()> {
-    let mut rng = StdRng::seed_from_u64(u64::try_from(len)?);
-    let random: BitBuffer = (0..len).map(|_| rng.random_bool(0.5)).collect();
-    // The same kind of bits, starting 3 bits into their buffer.
-    let offset: BitBuffer = (0..len + 3).map(|_| rng.random_bool(0.5)).collect();
-    for bits in [
-        random,
-        offset.slice(3..),
-        BitBuffer::new_set(len),
-        BitBuffer::new_unset(len),
-    ] {
-        let expected: Vec<usize> = bits
-            .iter()
-            .enumerate()
-            .filter_map(|(index, set)| (!set).then_some(index))
-            .collect();
-        let mut found = Vec::new();
-        for_each_unset_index(&bits, |index| found.push(index));
-        assert_eq!(found, expected);
-    }
-    Ok(())
 }

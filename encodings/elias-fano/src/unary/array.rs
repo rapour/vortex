@@ -3,6 +3,7 @@
 
 use std::fmt::Display;
 use std::fmt::Formatter;
+use std::hash::Hash;
 use std::hash::Hasher;
 
 use num_traits::AsPrimitive;
@@ -31,7 +32,7 @@ use vortex_array::vtable::OperationsVTable;
 use vortex_array::vtable::VTable;
 use vortex_array::vtable::ValidityVTable;
 use vortex_buffer::BitBuffer;
-use vortex_buffer::ByteBuffer;
+use vortex_buffer::BitBufferMeta;
 use vortex_error::VortexResult;
 use vortex_error::vortex_bail;
 use vortex_error::vortex_ensure;
@@ -41,7 +42,6 @@ use vortex_error::vortex_panic;
 use vortex_session::VortexSession;
 use vortex_session::registry::CachedId;
 
-use super::bits::for_each_unset_index;
 use super::compress::unary_decode;
 
 /// A [`Unary`]-encoded Vortex array.
@@ -62,24 +62,26 @@ pub(super) struct UnaryMetadata {
 /// The parts of a [`Unary`] array: its bits.
 #[derive(Clone, Debug)]
 pub struct UnaryData {
-    bits: BitBuffer,
+    bits: BufferHandle,
+    meta: BitBufferMeta,
 }
 
 impl Display for UnaryData {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "bits: {}", self.bits.len())
+        write!(f, "bits: {}", self.meta.len())
     }
 }
 
 impl ArrayHash for UnaryData {
     fn array_hash<H: Hasher>(&self, state: &mut H, accuracy: EqMode) {
         self.bits.array_hash(state, accuracy);
+        self.meta.offset().hash(state);
     }
 }
 
 impl ArrayEq for UnaryData {
     fn array_eq(&self, other: &Self, accuracy: EqMode) -> bool {
-        self.bits.array_eq(&other.bits, accuracy)
+        self.meta.offset() == other.meta.offset() && self.bits.array_eq(&other.bits, accuracy)
     }
 }
 
@@ -93,17 +95,17 @@ pub(super) fn bit_len(len: usize, num_ones: u64) -> Option<usize> {
 
 /// The number of set bits in `array`, which `validate` counted as the bits past its length.
 fn num_ones_of(array: ArrayView<'_, Unary>) -> VortexResult<u64> {
-    Ok(u64::try_from(array.bits().len() - array.len())?)
+    Ok(u64::try_from(array.meta.len() - array.len())?)
 }
 
 impl UnaryData {
     /// Rebuild the parts from a stored buffer whose bits start `offset` bits in. Only the offset
-    /// and the buffer's size are checked here, because [`BitBuffer::new_with_offset`] panics on a
-    /// buffer too short for its bits. Its own check saturates, so on 32-bit it can pass a buffer a
-    /// few bits short, and this one has to stay exact. [`Array::try_from_parts`] validates the
-    /// rest.
+    /// and the buffer's size are checked here, because the readers build the bits with
+    /// [`BitBuffer::new_with_offset`], which panics on a buffer too short for its bits. Its own
+    /// check saturates, so on 32-bit it can pass a buffer a few bits short, and this one has to
+    /// stay exact. [`Array::try_from_parts`] validates the rest.
     fn from_buffer(
-        buffer: ByteBuffer,
+        buffer: BufferHandle,
         num_ones: u64,
         offset: usize,
         len: usize,
@@ -128,7 +130,8 @@ impl UnaryData {
             buffer.len()
         );
         Ok(Self {
-            bits: BitBuffer::new_with_offset(buffer, bits, offset),
+            bits: buffer,
+            meta: BitBufferMeta::new(offset, bits),
         })
     }
 
@@ -137,7 +140,8 @@ impl UnaryData {
     /// Besides the dtype, the bit length and the last bit, this counts the set bits, one pass over
     /// the buffer. When the values could sum past the ptype's maximum, it also walks the unset bits
     /// once to check that each value fits. Any bits that pass then describe a valid array, and the
-    /// readers rely on this and check no value themselves.
+    /// readers rely on this and check no value themselves. Only the dtype and the bit length can
+    /// be checked when the buffer is not on the host.
     fn validate(&self, dtype: &DType, len: usize) -> VortexResult<()> {
         let DType::Primitive(ptype, NonNullable) = dtype else {
             vortex_bail!("UnaryArray requires a non-nullable unsigned integer dtype, got {dtype}");
@@ -146,20 +150,25 @@ impl UnaryData {
             ptype.is_unsigned_int(),
             "UnaryArray requires a non-nullable unsigned integer dtype, got {dtype}"
         );
-        let num_ones = self.bits.len().checked_sub(len).ok_or_else(|| {
+        let num_ones = self.meta.len().checked_sub(len).ok_or_else(|| {
             vortex_err!(
                 "UnaryArray of {len} values has only {} bits",
-                self.bits.len()
+                self.meta.len()
             )
         })?;
+        // Bits on a device cannot be read here.
+        if !self.bits.is_on_host() {
+            return Ok(());
+        }
+        let bits = self.to_bit_buffer();
         // An unset last bit closes the last value, and leaves an empty array no bits at all.
         vortex_ensure!(
-            self.bits.is_empty() || !self.bits.value(self.bits.len() - 1),
+            bits.is_empty() || !bits.value(bits.len() - 1),
             "UnaryArray bits must end with an unset bit"
         );
         // The linear checks run last. `num_ones` set bits among `len + num_ones` leave exactly
         // `len` unset, one closing each value.
-        vortex_ensure_eq!(self.bits.true_count(), num_ones);
+        vortex_ensure_eq!(bits.true_count(), num_ones);
         let max = ptype.max_value_as_u64();
         if u64::try_from(num_ones)? > max {
             let mut fits = true;
@@ -171,14 +180,19 @@ impl UnaryData {
         Ok(())
     }
 
-    pub(super) fn bits(&self) -> &BitBuffer {
-        &self.bits
+    /// The bits, which a buffer on a device cannot give.
+    pub(super) fn to_bit_buffer(&self) -> BitBuffer {
+        BitBuffer::new_with_offset(
+            self.bits.as_host().clone(),
+            self.meta.len(),
+            self.meta.offset(),
+        )
     }
 
     /// Call `f` with every value, in order, from one walk over the unset bits.
     pub(super) fn for_each_value(&self, mut f: impl FnMut(usize)) {
         let mut start = 0;
-        for_each_unset_index(&self.bits, |end| {
+        self.to_bit_buffer().for_each_unset_index(|end| {
             f(end - start);
             start = end + 1;
         });
@@ -188,17 +202,14 @@ impl UnaryData {
     /// on to its own closing bit.
     pub(super) fn value_at(&self, index: usize) -> VortexResult<u64> {
         let missing = || vortex_err!("UnaryArray has no unset bit for index {index}");
+        let bits = self.to_bit_buffer();
         let start = match index.checked_sub(1) {
-            Some(previous) => self.bits.select_unset(previous).ok_or_else(missing)? + 1,
+            Some(previous) => bits.select_unset(previous).ok_or_else(missing)? + 1,
             None => 0,
         };
         // The value is the run of set bits from `start` to the next unset bit, so this continues
         // from `start` rather than scanning from the first bit again.
-        let value = self
-            .bits
-            .slice(start..)
-            .select_unset(0)
-            .ok_or_else(missing)?;
+        let value = bits.slice(start..).select_unset(0).ok_or_else(missing)?;
         Ok(u64::try_from(value)?)
     }
 }
@@ -231,7 +242,7 @@ impl VTable for Unary {
 
     fn buffer(array: ArrayView<'_, Self>, idx: usize) -> BufferHandle {
         match idx {
-            0 => BufferHandle::new_host(array.bits().inner().clone()),
+            0 => array.bits.clone(),
             _ => vortex_panic!("UnaryArray buffer index {idx} out of bounds"),
         }
     }
@@ -250,9 +261,9 @@ impl VTable for Unary {
     ) -> VortexResult<ArrayParts<Self>> {
         vortex_ensure_eq!(buffers.len(), 1);
         let data = UnaryData::from_buffer(
-            buffers[0].try_to_host_sync()?,
+            buffers[0].clone(),
             num_ones_of(array)?,
-            array.bits().offset(),
+            array.meta.offset(),
             array.len(),
         )?;
         Ok(ArrayParts::new(
@@ -271,7 +282,7 @@ impl VTable for Unary {
         Ok(Some(
             UnaryMetadata {
                 num_ones: num_ones_of(array)?,
-                offset: u32::try_from(array.bits().offset())?,
+                offset: u32::try_from(array.meta.offset())?,
             }
             .encode_to_vec(),
         ))
@@ -290,7 +301,7 @@ impl VTable for Unary {
         vortex_ensure_eq!(children.len(), 0);
         let metadata = UnaryMetadata::decode(metadata)?;
         let data = UnaryData::from_buffer(
-            buffers[0].try_to_host_sync()?,
+            buffers[0].clone(),
             metadata.num_ones,
             usize::try_from(metadata.offset)?,
             len,
@@ -358,8 +369,10 @@ impl Unary {
         let dtype = DType::Primitive(ptype, NonNullable);
         // `shrink_offset` drops the whole bytes before and after the bits, so `buffer` exports only
         // the bytes they use and the offset stays below 8, as `from_buffer` requires.
+        let (offset, bits_len, buffer) = bits.shrink_offset().into_inner();
         let data = UnaryData {
-            bits: bits.shrink_offset(),
+            bits: BufferHandle::new_host(buffer),
+            meta: BitBufferMeta::new(offset, bits_len),
         };
         Array::try_from_parts(ArrayParts::new(Unary, dtype, len, data, ArraySlots::new()))
     }

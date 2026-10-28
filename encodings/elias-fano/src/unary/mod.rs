@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright the Vortex contributors
 
-//! The [`Unary`] encoding: the array, its encoder, the decode behind `execute`, and the walk over
-//! unset bits that decoding and validation use.
+//! The [`Unary`] encoding: the array, its encoder, and the decode behind `execute`.
 
 mod array;
-mod bits;
 mod compress;
 #[cfg(test)]
 mod tests;
