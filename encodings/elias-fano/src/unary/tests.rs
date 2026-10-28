@@ -50,8 +50,8 @@ use vortex_session::registry::ReadContext;
 
 use super::Unary;
 use super::UnaryArray;
-use super::array::UnaryMetadata;
 use super::unary_encode;
+use super::vtable::UnaryMetadata;
 
 static SESSION: LazyLock<VortexSession> = LazyLock::new(|| {
     let session = VortexSession::empty();

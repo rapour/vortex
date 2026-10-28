@@ -12,9 +12,9 @@ use vortex_array::match_each_unsigned_integer_ptype;
 use vortex_buffer::BitBufferMut;
 use vortex_error::VortexResult;
 
-use super::array::Unary;
-use super::array::UnaryArray;
 use super::array::bit_len;
+use super::vtable::Unary;
+use super::vtable::UnaryArray;
 
 /// Encode `array` as a [`Unary`] array.
 ///
