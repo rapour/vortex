@@ -3,14 +3,13 @@
 
 use num_traits::AsPrimitive;
 use vortex_array::ArrayView;
+use vortex_array::ExecutionCtx;
+use vortex_array::aggregate_fn::fns::sum::sum;
 use vortex_array::arrays::Primitive;
-use vortex_array::arrays::PrimitiveArray;
 use vortex_array::dtype::DType;
 use vortex_array::dtype::Nullability::NonNullable;
 use vortex_array::match_each_unsigned_integer_ptype;
-use vortex_array::validity::Validity;
 use vortex_buffer::BitBufferMut;
-use vortex_buffer::BufferMut;
 use vortex_error::VortexResult;
 
 use super::array::Unary;
@@ -26,7 +25,10 @@ use super::array::bit_len;
 /// - the encoding would take more bits than the plain array's `len × bit width`, which happens
 ///   once the values average more than `bit width - 1`. This keeps large values from growing past
 ///   their input, and bounds what the encoder allocates.
-pub fn unary_encode(array: ArrayView<'_, Primitive>) -> VortexResult<Option<UnaryArray>> {
+pub fn unary_encode(
+    array: ArrayView<'_, Primitive>,
+    ctx: &mut ExecutionCtx,
+) -> VortexResult<Option<UnaryArray>> {
     let &DType::Primitive(ptype, NonNullable) = array.dtype() else {
         return Ok(None);
     };
@@ -34,15 +36,16 @@ pub fn unary_encode(array: ArrayView<'_, Primitive>) -> VortexResult<Option<Unar
         return Ok(None);
     }
     let len = array.len();
+    // `sum` is null when the values overflow a `u64`.
+    let Some(num_ones) = sum(array.array(), ctx)?
+        .as_primitive()
+        .try_typed_value::<u64>()?
+    else {
+        return Ok(None);
+    };
 
     match_each_unsigned_integer_ptype!(ptype, |T| {
         let values = array.as_slice::<T>();
-        let Some(num_ones) = values
-            .iter()
-            .try_fold(0u64, |sum, &value| sum.checked_add(value.as_()))
-        else {
-            return Ok(None);
-        };
         let Some(bits) = bit_len(len, num_ones) else {
             return Ok(None);
         };
@@ -64,17 +67,5 @@ pub fn unary_encode(array: ArrayView<'_, Primitive>) -> VortexResult<Option<Unar
             end += 1;
         }
         Unary::try_new(buffer.freeze(), ptype, len).map(Some)
-    })
-}
-
-/// Decode every value with one walk over the unset bits.
-pub(super) fn unary_decode(array: &UnaryArray) -> PrimitiveArray {
-    let len = array.len();
-
-    // `validate` keeps every value within the ptype, so the loop has nothing to check.
-    match_each_unsigned_integer_ptype!(array.dtype().as_ptype(), |T| {
-        let mut values = BufferMut::<T>::with_capacity(len);
-        array.for_each_value(|value| values.push(AsPrimitive::<T>::as_(value)));
-        PrimitiveArray::new(values, Validity::NonNullable)
     })
 }

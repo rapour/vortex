@@ -68,7 +68,10 @@ fn primitive(ptype: PType, values: &[u64]) -> PrimitiveArray {
 
 fn encode_as(ptype: PType, values: &[u64]) -> VortexResult<Option<UnaryArray>> {
     let array = primitive(ptype, values);
-    unary_encode(array.as_ref().as_::<Primitive>())
+    unary_encode(
+        array.as_ref().as_::<Primitive>(),
+        &mut SESSION.create_execution_ctx(),
+    )
 }
 
 fn encode(values: &[u64]) -> VortexResult<UnaryArray> {
@@ -174,7 +177,11 @@ fn test_encode_returns_none() -> VortexResult<()> {
     ];
     for input in inputs {
         assert!(
-            unary_encode(input.as_ref().as_::<Primitive>())?.is_none(),
+            unary_encode(
+                input.as_ref().as_::<Primitive>(),
+                &mut SESSION.create_execution_ctx()
+            )?
+            .is_none(),
             "{} encoded",
             input.dtype()
         );

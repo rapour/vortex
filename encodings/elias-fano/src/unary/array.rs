@@ -20,6 +20,7 @@ use vortex_array::EqMode;
 use vortex_array::ExecutionCtx;
 use vortex_array::ExecutionResult;
 use vortex_array::IntoArray;
+use vortex_array::arrays::PrimitiveArray;
 use vortex_array::buffer::BufferHandle;
 use vortex_array::dtype::DType;
 use vortex_array::dtype::Nullability::NonNullable;
@@ -33,6 +34,7 @@ use vortex_array::vtable::VTable;
 use vortex_array::vtable::ValidityVTable;
 use vortex_buffer::BitBuffer;
 use vortex_buffer::BitBufferMeta;
+use vortex_buffer::BufferMut;
 use vortex_error::VortexResult;
 use vortex_error::vortex_bail;
 use vortex_error::vortex_ensure;
@@ -41,8 +43,6 @@ use vortex_error::vortex_err;
 use vortex_error::vortex_panic;
 use vortex_session::VortexSession;
 use vortex_session::registry::CachedId;
-
-use super::compress::unary_decode;
 
 /// A [`Unary`]-encoded Vortex array.
 pub type UnaryArray = Array<Unary>;
@@ -321,6 +321,18 @@ impl VTable for Unary {
     }
 }
 
+/// Decode every value with one walk over the unset bits.
+fn unary_decode(array: &UnaryArray) -> PrimitiveArray {
+    let len = array.len();
+
+    // `validate` keeps every value within the ptype, so the loop has nothing to check.
+    match_each_unsigned_integer_ptype!(array.dtype().as_ptype(), |T| {
+        let mut values = BufferMut::<T>::with_capacity(len);
+        array.for_each_value(|value| values.push(AsPrimitive::<T>::as_(value)));
+        PrimitiveArray::new(values, Validity::NonNullable)
+    })
+}
+
 impl OperationsVTable<Unary> for Unary {
     type ProbeState = ();
 
@@ -355,6 +367,10 @@ impl ValidityVTable<Unary> for Unary {
 ///
 /// Reads are deliberately simple for now: `scalar_at` scans from the first bit, and a slice
 /// decodes the whole array.
+///
+/// There is no validity yet, which keeps the encoding simple. Adding it must stay backwards
+/// compatible, which an optional validity child allows, as in Bool: arrays written now have no
+/// children, so they still read back as non-nullable.
 #[derive(Clone, Debug)]
 pub struct Unary;
 

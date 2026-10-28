@@ -34,6 +34,8 @@ use vortex_array::IntoArray;
 use vortex_array::VortexSessionExecute;
 use vortex_array::arrays::Primitive;
 use vortex_array::arrays::PrimitiveArray;
+use vortex_array::validity::Validity;
+use vortex_buffer::Buffer;
 use vortex_elias_fano::unary_encode;
 use vortex_session::VortexSession;
 
@@ -104,18 +106,29 @@ fn primitive(shape: Shape) -> PrimitiveArray {
 }
 
 fn encoded(shape: Shape) -> ArrayRef {
-    unary_encode(primitive(shape).as_ref().as_::<Primitive>())
-        .unwrap()
-        .unwrap()
-        .into_array()
+    unary_encode(
+        primitive(shape).as_ref().as_::<Primitive>(),
+        &mut SESSION.create_execution_ctx(),
+    )
+    .unwrap()
+    .unwrap()
+    .into_array()
 }
 
 #[divan::bench(args = SHAPES)]
 fn encode(bencher: Bencher, shape: Shape) {
-    let array = primitive(shape);
-    bencher.bench_local(|| {
-        divan::black_box(unary_encode(array.as_ref().as_::<Primitive>()).unwrap());
-    });
+    let values = Buffer::from(counts(shape));
+    // A fresh array each time, so `sum` cannot reuse the statistic cached on the last one.
+    bencher
+        .with_inputs(|| {
+            (
+                PrimitiveArray::new(values.clone(), Validity::NonNullable),
+                SESSION.create_execution_ctx(),
+            )
+        })
+        .bench_local_values(|(array, mut ctx)| {
+            divan::black_box(unary_encode(array.as_ref().as_::<Primitive>(), &mut ctx).unwrap());
+        });
 }
 
 /// The whole array, in one walk over the unset bits.
