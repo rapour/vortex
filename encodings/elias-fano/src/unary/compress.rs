@@ -11,6 +11,7 @@ use vortex_array::dtype::Nullability::NonNullable;
 use vortex_array::match_each_unsigned_integer_ptype;
 use vortex_buffer::BitBufferMut;
 use vortex_error::VortexResult;
+use vortex_error::vortex_ensure;
 
 use super::array::bit_len;
 use super::vtable::Unary;
@@ -43,26 +44,27 @@ pub fn unary_encode(
     else {
         return Ok(None);
     };
+    let Some(bits) = bit_len(len, num_ones) else {
+        return Ok(None);
+    };
+    // A plain size past `usize::MAX` is larger than `bits`, which fits one.
+    if len
+        .checked_mul(ptype.bit_width())
+        .is_some_and(|plain| bits > plain)
+    {
+        return Ok(None);
+    }
 
     match_each_unsigned_integer_ptype!(ptype, |T| {
-        let values = array.as_slice::<T>();
-        let Some(bits) = bit_len(len, num_ones) else {
-            return Ok(None);
-        };
-        // A plain size past `usize::MAX` is larger than `bits`, which fits one.
-        if len
-            .checked_mul(ptype.bit_width())
-            .is_some_and(|plain| bits > plain)
-        {
-            return Ok(None);
-        }
-
-        // Each value is at most `num_ones`, below `bits`, which fits a `usize`, so the conversion
-        // is exact.
         let mut buffer = BitBufferMut::new_set(bits);
         let mut end = 0;
-        for &value in values {
+        for &value in array.as_slice::<T>() {
             end += AsPrimitive::<usize>::as_(value);
+            // `num_ones` can be a cached statistic, so a wrong one must not run past the bits.
+            vortex_ensure!(
+                end < bits,
+                "UnaryArray input sums past its sum statistic {num_ones}"
+            );
             buffer.unset(end);
             end += 1;
         }

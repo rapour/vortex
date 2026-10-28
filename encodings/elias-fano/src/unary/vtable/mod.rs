@@ -28,7 +28,6 @@ use vortex_array::serde::ArrayChildren;
 use vortex_array::validity::Validity;
 use vortex_array::vtable::VTable;
 use vortex_buffer::BitBuffer;
-use vortex_buffer::BitBufferMeta;
 use vortex_buffer::BufferMut;
 use vortex_error::VortexResult;
 use vortex_error::vortex_ensure_eq;
@@ -59,13 +58,13 @@ pub(super) struct UnaryMetadata {
 impl ArrayHash for UnaryData {
     fn array_hash<H: Hasher>(&self, state: &mut H, accuracy: EqMode) {
         self.bits.array_hash(state, accuracy);
-        self.meta.offset().hash(state);
+        self.meta.hash(state);
     }
 }
 
 impl ArrayEq for UnaryData {
     fn array_eq(&self, other: &Self, accuracy: EqMode) -> bool {
-        self.meta.offset() == other.meta.offset() && self.bits.array_eq(&other.bits, accuracy)
+        self.meta == other.meta && self.bits.array_eq(&other.bits, accuracy)
     }
 }
 
@@ -220,13 +219,7 @@ impl Unary {
     /// Prefer [`unary_encode`](crate::unary_encode) unless you already hold the bits.
     pub fn try_new(bits: BitBuffer, ptype: PType, len: usize) -> VortexResult<UnaryArray> {
         let dtype = DType::Primitive(ptype, NonNullable);
-        // `shrink_offset` drops the whole bytes before and after the bits, so the buffer holds only
-        // the bytes they use and the offset is below 8, as `BitBufferMeta` requires.
-        let (offset, bits_len, buffer) = bits.shrink_offset().into_inner();
-        let data = UnaryData {
-            bits: BufferHandle::new_host(buffer),
-            meta: BitBufferMeta::new(offset, bits_len),
-        };
+        let data = UnaryData::from_bit_buffer(bits);
         Array::try_from_parts(ArrayParts::new(Unary, dtype, len, data, ArraySlots::new()))
     }
 }

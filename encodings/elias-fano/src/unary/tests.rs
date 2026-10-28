@@ -33,7 +33,10 @@ use vortex_array::compute::conformance::consistency::test_array_consistency;
 use vortex_array::dtype::DType;
 use vortex_array::dtype::Nullability::NonNullable;
 use vortex_array::dtype::PType;
+use vortex_array::expr::stats::Precision;
+use vortex_array::expr::stats::Stat;
 use vortex_array::match_each_unsigned_integer_ptype;
+use vortex_array::scalar::ScalarValue;
 use vortex_array::serde::SerializeOptions;
 use vortex_array::serde::SerializedArray;
 use vortex_array::test_harness::check_metadata;
@@ -190,6 +193,26 @@ fn test_encode_returns_none() -> VortexResult<()> {
 }
 
 #[rstest]
+// Below the real sum of 6, which would run the encoder past its bits.
+#[case::low(0)]
+// Above it, which leaves the last bits set.
+#[case::high(10)]
+fn test_encode_rejects_wrong_sum_statistic(#[case] sum: u64) {
+    let array = PrimitiveArray::from_iter([1u64, 2, 3]);
+    // A file can carry a cached sum that disagrees with the values.
+    array
+        .statistics()
+        .set(Stat::Sum, Precision::Exact(ScalarValue::from(sum)));
+    assert!(
+        unary_encode(
+            array.as_ref().as_::<Primitive>(),
+            &mut SESSION.create_execution_ctx()
+        )
+        .is_err()
+    );
+}
+
+#[rstest]
 #[case(PType::U8)]
 #[case(PType::U16)]
 #[case(PType::U32)]
@@ -258,7 +281,7 @@ fn test_try_new_rejects() -> VortexResult<()> {
 #[rstest]
 #[case::vtable(false)]
 #[case::plugin(true)]
-fn test_deserialize_rejects(#[case] plugin: bool) {
+fn test_deserialize_rejects(#[case] plugin: bool) -> VortexResult<()> {
     let dtype = DType::Primitive(PType::U64, NonNullable);
     let metadata = |num_ones: u64| {
         UnaryMetadata {
@@ -294,7 +317,7 @@ fn test_deserialize_rejects(#[case] plugin: bool) {
 
     let one = slice::from_ref(&bits);
 
-    assert!(deserialize(&metadata(1), one, &no_children).is_ok());
+    deserialize(&metadata(1), one, &no_children)?;
     assert!(deserialize(&metadata(1), &[], &no_children).is_err());
     assert!(deserialize(&metadata(1), &[bits.clone(), bits.clone()], &no_children).is_err());
     assert!(
@@ -324,6 +347,7 @@ fn test_deserialize_rejects(#[case] plugin: bool) {
     // `11 0` keeps the last bit unset, but holds two set bits where the metadata says one.
     let extra = BufferHandle::new_host(BitBuffer::from(vec![true, true, false]).inner().clone());
     assert!(deserialize(&metadata(1), slice::from_ref(&extra), &no_children).is_err());
+    Ok(())
 }
 
 #[rstest]
@@ -372,6 +396,21 @@ fn test_array_eq_hash() -> VortexResult<()> {
     for other in [encode(&[0, 1, 2])?, encode(&[1, 0, 3])?] {
         assert!(!array.array_eq(&other.into_array(), EqMode::Value));
     }
+
+    // The byte `0b10` holds `[0, 1]` from bit 0 and `[1, 0]` from bit 1, so only the offset tells
+    // these apart.
+    let at = |offset| {
+        Unary::try_new(
+            BitBuffer::new_with_offset(buffer![0b10u8], 3, offset),
+            PType::U64,
+            2,
+        )
+    };
+    assert!(
+        !at(0)?
+            .into_array()
+            .array_eq(&at(1)?.into_array(), EqMode::Value)
+    );
     Ok(())
 }
 

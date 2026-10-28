@@ -37,6 +37,17 @@ pub(super) fn bit_len(len: usize, num_ones: u64) -> Option<usize> {
 }
 
 impl UnaryData {
+    /// The parts holding `bits`.
+    pub(super) fn from_bit_buffer(bits: BitBuffer) -> Self {
+        // `shrink_offset` drops the whole bytes before and after the bits, so the buffer holds only
+        // the bytes they use and the offset is below 8, as `BitBufferMeta` requires.
+        let (offset, len, buffer) = bits.shrink_offset().into_inner();
+        Self {
+            bits: BufferHandle::new_host(buffer),
+            meta: BitBufferMeta::new(offset, len),
+        }
+    }
+
     /// Rebuild the parts from a stored buffer whose bits start `offset` bits in. Only the offset
     /// and the buffer's size are checked here. The readers rebuild the bits with
     /// [`BitBuffer::new_with_offset`], whose own check can pass a short buffer on 32-bit, so this
