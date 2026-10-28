@@ -93,17 +93,16 @@ pub(super) fn bit_len(len: usize, num_ones: u64) -> Option<usize> {
         .and_then(|bits| usize::try_from(bits).ok())
 }
 
-/// The number of set bits in `array`, which `validate` counted as the bits past its length.
+/// The number of set bits in `array`, which is its bit length minus its length.
 fn num_ones_of(array: ArrayView<'_, Unary>) -> VortexResult<u64> {
     Ok(u64::try_from(array.meta.len() - array.len())?)
 }
 
 impl UnaryData {
     /// Rebuild the parts from a stored buffer whose bits start `offset` bits in. Only the offset
-    /// and the buffer's size are checked here, because the readers build the bits with
-    /// [`BitBuffer::new_with_offset`], which panics on a buffer too short for its bits. Its own
-    /// check saturates, so on 32-bit it can pass a buffer a few bits short, and this one has to
-    /// stay exact. [`Array::try_from_parts`] validates the rest.
+    /// and the buffer's size are checked here. The readers rebuild the bits with
+    /// [`BitBuffer::new_with_offset`], whose own check can pass a short buffer on 32-bit, so this
+    /// one must be exact. [`Array::try_from_parts`] validates the rest.
     fn from_buffer(
         buffer: BufferHandle,
         num_ones: u64,
@@ -137,11 +136,10 @@ impl UnaryData {
 
     /// Check the parts against an array of `len` values of `dtype`.
     ///
-    /// Besides the dtype, the bit length and the last bit, this counts the set bits, one pass over
-    /// the buffer. When the values could sum past the ptype's maximum, it also walks the unset bits
-    /// once to check that each value fits. Any bits that pass then describe a valid array, and the
-    /// readers rely on this and check no value themselves. Only the dtype and the bit length can
-    /// be checked when the buffer is not on the host.
+    /// The dtype and the bit length are always checked. When the bits are on the host, this also
+    /// checks the last bit and counts the set bits, and if the values could sum past the ptype's
+    /// maximum, walks them once to check that each value fits. The readers rely on this and check
+    /// no value themselves.
     fn validate(&self, dtype: &DType, len: usize) -> VortexResult<()> {
         let DType::Primitive(ptype, NonNullable) = dtype else {
             vortex_bail!("UnaryArray requires a non-nullable unsigned integer dtype, got {dtype}");
@@ -156,7 +154,6 @@ impl UnaryData {
                 self.meta.len()
             )
         })?;
-        // Bits on a device cannot be read here.
         if !self.bits.is_on_host() {
             return Ok(());
         }
@@ -180,7 +177,7 @@ impl UnaryData {
         Ok(())
     }
 
-    /// The bits, which a buffer on a device cannot give.
+    /// The bits. Panics if the buffer is on a device.
     pub(super) fn to_bit_buffer(&self) -> BitBuffer {
         BitBuffer::new_with_offset(
             self.bits.as_host().clone(),
@@ -367,8 +364,8 @@ impl Unary {
     /// Prefer [`unary_encode`](crate::unary_encode) unless you already hold the bits.
     pub fn try_new(bits: BitBuffer, ptype: PType, len: usize) -> VortexResult<UnaryArray> {
         let dtype = DType::Primitive(ptype, NonNullable);
-        // `shrink_offset` drops the whole bytes before and after the bits, so `buffer` exports only
-        // the bytes they use and the offset stays below 8, as `from_buffer` requires.
+        // `shrink_offset` drops the whole bytes before and after the bits, so the buffer holds only
+        // the bytes they use and the offset is below 8, as `BitBufferMeta` requires.
         let (offset, bits_len, buffer) = bits.shrink_offset().into_inner();
         let data = UnaryData {
             bits: BufferHandle::new_host(buffer),
